@@ -35,6 +35,14 @@ class BagState(str, Enum):
             BagState.RECHECKED,
         )
 
+class LoanState(str, Enum):
+    """Lifecycle of one temporary allowance loan between flights."""
+
+    OPEN = "open"
+    SETTLED = "settled"
+    ROLLED_BACK = "rolled_back"
+
+
 class Verdict(str, Enum):
     """Result of comparing an observed (epoch, sequence) pair with the high-water mark."""
 

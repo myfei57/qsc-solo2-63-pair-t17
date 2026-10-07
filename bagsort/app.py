@@ -21,12 +21,12 @@ from bagsort.flight.mapping import BagMapping
 from bagsort.flight.schedule import ScheduleBoard
 from bagsort.ids import IdFactory
 from bagsort.inject.injector import Injector
-from bagsort.model.entities import Bag, Flight, Reading, SortRecord
+from bagsort.model.entities import Bag, Flight, QuotaLoan, Reading, SortRecord
 from bagsort.model.errors import unknown_bag
 from bagsort.ns.chutes import ChuteRegistry
 from bagsort.ns.namespace import Namespace
 from bagsort.ns.topology import handling_line
-from bagsort.quota.quota import QuotaBook
+from bagsort.quota.quota import QuotaBook, crosscheck_loans
 from bagsort.recheck.queue import RecheckQueue
 from bagsort.reporting.report import PlantReport
 from bagsort.sequence.verdict import VerdictTracker
@@ -117,6 +117,9 @@ class Plant:
             "chute.assigned",
             "belt.switched",
             "bag.remapped",
+            "quota.loaned",
+            "quota.repaid",
+            "quota.loan_rolled_back",
         ):
             bus.subscribe(topic, audit_subscriber)
 
@@ -217,6 +220,18 @@ class Plant:
 
     def close_flight(self, flight_id: str) -> Flight:
         flight = self.closer.close(flight_id, self.injector)
+        # Closing settles the loan book: every open loan that touches the
+        # flight is recalled, and whatever the borrower cannot return is
+        # written off as the lender's bad debt.
+        for loan, returned in self.quota.rollback_for_flight(flight_id):
+            self.bus.publish(
+                "quota.loan_rolled_back",
+                loan_id=loan.id,
+                lender=loan.lender,
+                borrower=loan.borrower,
+                returned=returned,
+                written_off=loan.written_off,
+            )
         self.bus.publish("flight.closed", flight_id=flight_id)
         return flight
 
@@ -243,6 +258,49 @@ class Plant:
     def set_quota(self, flight_id: str, limit: int) -> int:
         return self.quota.set_limit(flight_id, limit)
 
+    def lend_quota(
+        self, lender_id: str, borrower_id: str, amount: int, due_at: str = ""
+    ) -> QuotaLoan:
+        """Lend allowance between two flights that are both still boarding."""
+
+        self.book.require_open(lender_id)
+        self.book.require_open(borrower_id)
+        loan = self.quota.lend(lender_id, borrower_id, amount, due_at=due_at)
+        self.bus.publish(
+            "quota.loaned",
+            loan_id=loan.id,
+            lender=loan.lender,
+            borrower=loan.borrower,
+            amount=loan.amount,
+            due_at=loan.due_at,
+        )
+        return loan
+
+    def repay_quota(self, loan_id: str, count: int | None = None) -> QuotaLoan:
+        loan = self.quota.repay(loan_id, count)
+        self.bus.publish(
+            "quota.repaid",
+            loan_id=loan.id,
+            lender=loan.lender,
+            borrower=loan.borrower,
+            repaid=loan.repaid,
+            outstanding=loan.outstanding,
+        )
+        return loan
+
+    def quota_loans(self, flight_id: str | None = None) -> list[QuotaLoan]:
+        return self.quota.loans(flight_id)
+
+    def verify_quota(self) -> list[str]:
+        """Cross-check the loan book against the journal, audit and flights."""
+
+        return crosscheck_loans(
+            self.quota.loans(),
+            self.store.journal.committed(),
+            self.audit.entries(),
+            self.book.list(),
+        )
+
     def verify(self) -> bool:
         return self.audit.verify()
 
@@ -259,6 +317,9 @@ class _AuditSubscriber:
         "chute.assigned": ("chute_assign", "chute"),
         "belt.switched": ("belt_switch", "belt"),
         "bag.remapped": ("remap", "checkin"),
+        "quota.loaned": ("quota_loan", "checkin"),
+        "quota.repaid": ("quota_repay", "checkin"),
+        "quota.loan_rolled_back": ("quota_loan_rollback", "checkin"),
     }
 
     def __init__(self, audit: AuditChain) -> None:
@@ -272,6 +333,7 @@ class _AuditSubscriber:
         subject = str(
             event.payload.get("bag_id")
             or event.payload.get("flight_id")
+            or event.payload.get("loan_id")
             or event.payload.get("carousel")
             or ""
         )

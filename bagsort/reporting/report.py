@@ -46,6 +46,8 @@ class PlantReport:
             "batch": self._belt.batch(),
             "watermark": self._store.watermark,
             "quota": self._quota.limits(),
+            "quota_loans": len(self._quota.loans()),
+            "quota_outstanding": self._quota.outstanding(),
         }
 
     def flight_rows(self) -> list[dict[str, object]]:

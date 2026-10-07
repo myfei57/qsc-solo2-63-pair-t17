@@ -658,6 +658,36 @@ def handle_quota_release(server, request: Request) -> Response:
     return json_response({"remaining": remaining})
 
 
+def handle_quota_lend(server, request: Request) -> Response:
+    loan = _plant(server).lend_quota(
+        request.required("lender"),
+        request.required("borrower"),
+        request.int_field("amount"),
+        due_at=request.str_field("due_at"),
+    )
+    return json_response(loan.as_dict())
+
+
+def handle_quota_repay(server, request: Request) -> Response:
+    count = request.int_field("count", 0)
+    loan = _plant(server).repay_quota(request.required("loan_id"), count or None)
+    return json_response(loan.as_dict())
+
+
+def handle_quota_loans(server, request: Request) -> Response:
+    loans = _plant(server).quota_loans(request.query_str("flight") or None)
+    return json_response([loan.as_dict() for loan in loans])
+
+
+def handle_quota_loan(server, request: Request) -> Response:
+    return json_response(_plant(server).quota.loan(request.param("id")).as_dict())
+
+
+def handle_quota_loans_verify(server, request: Request) -> Response:
+    problems = _plant(server).verify_quota()
+    return json_response({"consistent": not problems, "problems": problems})
+
+
 # ---------------------------------------------------------------------------
 # audit
 # ---------------------------------------------------------------------------

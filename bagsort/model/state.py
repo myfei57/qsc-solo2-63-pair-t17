@@ -16,10 +16,12 @@ from .entities import (
     ChuteAssignment,
     Flight,
     LoadRecord,
+    QuotaLoan,
     Sequence,
     SortRecord,
     TransferCommand,
 )
+from .enums import LoanState
 from bagsort.errors import ValidationError
 
 
@@ -36,6 +38,7 @@ class State:
     load_records: list[LoadRecord] = field(default_factory=list)
     audit: list[AuditEntry] = field(default_factory=list)
     quota_limits: dict[str, int] = field(default_factory=dict)
+    quota_loans: dict[str, QuotaLoan] = field(default_factory=dict)
     counters: dict[str, int] = field(default_factory=dict)
     sequence: Sequence = field(default_factory=Sequence)
     recheck_queue: list[str] = field(default_factory=list)
@@ -54,6 +57,7 @@ class State:
             load_records=list(self.load_records),
             audit=list(self.audit),
             quota_limits=dict(self.quota_limits),
+            quota_loans=dict(self.quota_loans),
             counters=dict(self.counters),
             sequence=self.sequence,
             recheck_queue=list(self.recheck_queue),
@@ -75,6 +79,9 @@ class State:
             "load_records": [record.as_dict() for record in self.load_records],
             "audit": [entry.as_dict() for entry in self.audit],
             "quota_limits": dict(sorted(self.quota_limits.items())),
+            "quota_loans": {
+                key: value.as_dict() for key, value in sorted(self.quota_loans.items())
+            },
             "counters": dict(sorted(self.counters.items())),
             "sequence": self.sequence.as_dict(),
             "recheck_queue": list(self.recheck_queue),
@@ -130,6 +137,26 @@ def apply_entry(state: State, kind: str, payload: dict[str, Any]) -> None:
         flight_id = str(payload["flight_id"])
         base = state.quota_limits.get(flight_id, 0)
         state.quota_limits[flight_id] = base + int(payload["delta"])
+    elif kind == "quota.loan_open":
+        loan = QuotaLoan.from_dict(payload["loan"])
+        state.quota_loans[loan.id] = loan
+    elif kind == "quota.loan_repay":
+        loan = state.quota_loans[str(payload["loan_id"])]
+        repaid = loan.repaid + int(payload["count"])
+        settled = repaid >= loan.amount
+        state.quota_loans[loan.id] = loan.evolved(
+            repaid=repaid,
+            state=LoanState.SETTLED if settled else loan.state,
+            settled_at=str(payload.get("at", "")) if settled else loan.settled_at,
+        )
+    elif kind == "quota.loan_rollback":
+        loan = state.quota_loans[str(payload["loan_id"])]
+        state.quota_loans[loan.id] = loan.evolved(
+            repaid=loan.repaid + int(payload["returned"]),
+            written_off=loan.written_off + int(payload["written_off"]),
+            state=LoanState.ROLLED_BACK,
+            settled_at=str(payload.get("at", "")),
+        )
     elif kind == "counter.add":
         name = str(payload["name"])
         state.counters[name] = state.counters.get(name, 0) + int(payload["delta"])

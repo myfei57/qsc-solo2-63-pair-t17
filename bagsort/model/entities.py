@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field, replace
 from typing import Any
 
-from .enums import BagState, FlightState
+from .enums import BagState, FlightState, LoanState
 
 
 def _clean(raw: Any) -> Any:
@@ -249,6 +249,67 @@ class Sequence:
     @classmethod
     def from_dict(cls, raw: dict[str, Any]) -> "Sequence":
         return cls(epoch=int(raw.get("epoch", 0)), next_value=int(raw.get("next", 0)))
+
+
+@dataclass(frozen=True)
+class QuotaLoan:
+    """One temporary allowance loan: the payable a borrower owes its lender.
+
+    ``amount`` is the principal; ``repaid`` is what the borrower has handed
+    back; ``written_off`` is the part the lender absorbed as bad debt when a
+    flight closed before the balance was returned. The invariant is
+    ``repaid + written_off + outstanding == amount``.
+    """
+
+    id: str
+    lender: str
+    borrower: str
+    amount: int
+    repaid: int = 0
+    written_off: int = 0
+    state: LoanState = LoanState.OPEN
+    borrowed_at: str = ""
+    due_at: str = ""
+    settled_at: str = ""
+
+    @property
+    def outstanding(self) -> int:
+        """Balance the borrower still owes the lender."""
+
+        return self.amount - self.repaid - self.written_off
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "id": self.id,
+            "lender": self.lender,
+            "borrower": self.borrower,
+            "amount": self.amount,
+            "repaid": self.repaid,
+            "written_off": self.written_off,
+            "outstanding": self.outstanding,
+            "state": self.state.value,
+            "borrowed_at": self.borrowed_at,
+            "due_at": self.due_at,
+            "settled_at": self.settled_at,
+        }
+
+    @classmethod
+    def from_dict(cls, raw: dict[str, Any]) -> "QuotaLoan":
+        return cls(
+            id=str(raw["id"]),
+            lender=str(raw.get("lender", "")),
+            borrower=str(raw.get("borrower", "")),
+            amount=int(raw.get("amount", 0)),
+            repaid=int(raw.get("repaid", 0)),
+            written_off=int(raw.get("written_off", 0)),
+            state=LoanState(raw.get("state", LoanState.OPEN.value)),
+            borrowed_at=str(raw.get("borrowed_at", "")),
+            due_at=str(raw.get("due_at", "")),
+            settled_at=str(raw.get("settled_at", "")),
+        )
+
+    def evolved(self, **changes: Any) -> "QuotaLoan":
+        return replace(self, **changes)
 
 
 @dataclass(frozen=True)

@@ -19,3 +19,7 @@ def unknown_flight(flight_id: str) -> NotFoundError:
 
 def unknown_bag(bag_id: str) -> NotFoundError:
     return NotFoundError(f"bag {bag_id!r} is not registered")
+
+
+def unknown_loan(loan_id: str) -> NotFoundError:
+    return NotFoundError(f"quota loan {loan_id!r} is not registered")
