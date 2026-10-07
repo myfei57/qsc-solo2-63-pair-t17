@@ -632,7 +632,8 @@ def handle_quota_status(server, request: Request) -> Response:
 
 
 def handle_quota_for(server, request: Request) -> Response:
-    quota = _plant(server).quota
+    plant = _plant(server)
+    quota = plant.quota
     flight_id = request.param("flight")
     return json_response(
         {
@@ -640,8 +641,40 @@ def handle_quota_for(server, request: Request) -> Response:
             "limit": quota.limit(flight_id),
             "available": quota.available(flight_id),
             "allowed": quota.allowed(flight_id),
+            "loans": plant.loans.positions(flight_id),
         }
     )
+
+
+def handle_quota_lend(server, request: Request) -> Response:
+    loan = _plant(server).lend_quota(
+        request.required("lender_id"),
+        request.required("borrower_id"),
+        request.int_field("amount"),
+        request.required("due_at"),
+    )
+    return json_response(loan.as_dict(), status=201)
+
+
+def handle_quota_repay(server, request: Request) -> Response:
+    loan = _plant(server).repay_quota(request.required("loan_id"))
+    return json_response(loan.as_dict())
+
+
+def handle_quota_loans(server, request: Request) -> Response:
+    plant = _plant(server)
+    loans = plant.loans.history(
+        flight_id=request.query_str("flight_id"),
+        state=request.query_str("state"),
+    )
+    if request.query_str("overdue").lower() in {"1", "true", "yes"}:
+        overdue_ids = {loan.id for loan in plant.loans.overdue()}
+        loans = [loan for loan in loans if loan.id in overdue_ids]
+    return json_response([loan.as_dict() for loan in loans])
+
+
+def handle_quota_loan(server, request: Request) -> Response:
+    return json_response(_plant(server).loans.get(request.param("id")).as_dict())
 
 
 def handle_quota_consume(server, request: Request) -> Response:

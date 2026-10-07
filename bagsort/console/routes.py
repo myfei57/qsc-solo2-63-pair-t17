@@ -132,6 +132,10 @@ def route_table() -> list[Route]:
         # -- quota --------------------------------------------------------
         Route("POST", "/api/quota", "set a flight allowance", "handle_set_quota"),
         Route("GET", "/api/quota", "list every allowance", "handle_quota_status"),
+        Route("POST", "/api/quota/lend", "lend allowance to another flight", "handle_quota_lend"),
+        Route("POST", "/api/quota/repay", "repay a quota loan in full", "handle_quota_repay"),
+        Route("GET", "/api/quota/loans", "list quota loans", "handle_quota_loans"),
+        Route("GET", "/api/quota/loans/{id}", "read one quota loan", "handle_quota_loan"),
         Route("GET", "/api/quota/{flight}", "read one allowance", "handle_quota_for"),
         Route("POST", "/api/quota/consume", "consume allowance", "handle_quota_consume"),
         Route("POST", "/api/quota/release", "release allowance", "handle_quota_release"),

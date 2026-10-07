@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field, replace
 from typing import Any
 
-from .enums import BagState, FlightState
+from .enums import BagState, FlightState, LoanState
 
 
 def _clean(raw: Any) -> Any:
@@ -236,6 +236,60 @@ class LoadRecord:
             batch=int(raw.get("batch", 0)),
             at=str(raw.get("at", "")),
         )
+
+
+@dataclass(frozen=True)
+class QuotaLoan:
+    """One temporary allowance loan from one flight to another.
+
+    ``returned`` and ``bad_debt`` stay zero while the loan is open and are
+    filled in when the loan settles: a repayment returns the full amount,
+    a close-time rollback returns only what the borrower still holds and
+    writes the shortfall off as bad debt borne by the lender.
+    """
+
+    id: str
+    lender_id: str
+    borrower_id: str
+    amount: int
+    due_at: str
+    state: LoanState = LoanState.OPEN
+    created_at: str = ""
+    settled_at: str = ""
+    returned: int = 0
+    bad_debt: int = 0
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "id": self.id,
+            "lender_id": self.lender_id,
+            "borrower_id": self.borrower_id,
+            "amount": self.amount,
+            "due_at": self.due_at,
+            "state": self.state.value,
+            "created_at": self.created_at,
+            "settled_at": self.settled_at,
+            "returned": self.returned,
+            "bad_debt": self.bad_debt,
+        }
+
+    @classmethod
+    def from_dict(cls, raw: dict[str, Any]) -> "QuotaLoan":
+        return cls(
+            id=str(raw["id"]),
+            lender_id=str(raw.get("lender_id", "")),
+            borrower_id=str(raw.get("borrower_id", "")),
+            amount=int(raw.get("amount", 0)),
+            due_at=str(raw.get("due_at", "")),
+            state=LoanState(raw.get("state", LoanState.OPEN.value)),
+            created_at=str(raw.get("created_at", "")),
+            settled_at=str(raw.get("settled_at", "")),
+            returned=int(raw.get("returned", 0)),
+            bad_debt=int(raw.get("bad_debt", 0)),
+        )
+
+    def evolved(self, **changes: Any) -> "QuotaLoan":
+        return replace(self, **changes)
 
 
 @dataclass(frozen=True)

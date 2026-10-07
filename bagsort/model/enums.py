@@ -1,4 +1,4 @@
-"""Enumerations for the two state machines the plant tracks."""
+"""Enumerations for the state machines the plant tracks."""
 
 from __future__ import annotations
 
@@ -34,6 +34,14 @@ class BagState(str, Enum):
             BagState.SORTED,
             BagState.RECHECKED,
         )
+
+class LoanState(str, Enum):
+    """Lifecycle of one allowance loan between flights."""
+
+    OPEN = "open"
+    REPAID = "repaid"
+    ROLLED_BACK = "rolled_back"
+
 
 class Verdict(str, Enum):
     """Result of comparing an observed (epoch, sequence) pair with the high-water mark."""

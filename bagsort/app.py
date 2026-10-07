@@ -21,12 +21,13 @@ from bagsort.flight.mapping import BagMapping
 from bagsort.flight.schedule import ScheduleBoard
 from bagsort.ids import IdFactory
 from bagsort.inject.injector import Injector
-from bagsort.model.entities import Bag, Flight, Reading, SortRecord
+from bagsort.model.entities import Bag, Flight, QuotaLoan, Reading, SortRecord
 from bagsort.model.errors import unknown_bag
 from bagsort.ns.chutes import ChuteRegistry
 from bagsort.ns.namespace import Namespace
 from bagsort.ns.topology import handling_line
 from bagsort.quota.quota import QuotaBook
+from bagsort.quota.loan import LoanBook
 from bagsort.recheck.queue import RecheckQueue
 from bagsort.reporting.report import PlantReport
 from bagsort.sequence.verdict import VerdictTracker
@@ -67,6 +68,7 @@ class Plant:
     recheck: RecheckQueue
     belt: Belt
     quota: QuotaBook
+    loans: LoanBook
     audit: AuditChain
     report: PlantReport
 
@@ -101,6 +103,7 @@ class Plant:
         sorter = Sorter(store, mapping, chutes, clock, VerdictTracker())
         injector = Injector(store, book, sorter, clock)
         quota = QuotaBook(store, clock)
+        loans = LoanBook(store, clock, book)
         desk = Desk(store, reader, book, mapping, injector, quota, clock, handling_line())
         closer = FlightCloser(book)
         recheck = RecheckQueue(store, book, clock)
@@ -117,6 +120,9 @@ class Plant:
             "chute.assigned",
             "belt.switched",
             "bag.remapped",
+            "quota.lent",
+            "quota.repaid",
+            "quota.rolled_back",
         ):
             bus.subscribe(topic, audit_subscriber)
 
@@ -145,6 +151,7 @@ class Plant:
             recheck=recheck,
             belt=belt,
             quota=quota,
+            loans=loans,
             audit=audit,
             report=report,
         )
@@ -217,8 +224,44 @@ class Plant:
 
     def close_flight(self, flight_id: str) -> Flight:
         flight = self.closer.close(flight_id, self.injector)
+        for loan in self.loans.rollback_for_flight(flight_id):
+            self._publish_rolled_back(loan)
         self.bus.publish("flight.closed", flight_id=flight_id)
         return flight
+
+    def _publish_rolled_back(self, loan: QuotaLoan) -> None:
+        self.bus.publish(
+            "quota.rolled_back",
+            loan_id=loan.id,
+            lender_id=loan.lender_id,
+            borrower_id=loan.borrower_id,
+            amount=loan.amount,
+            returned=loan.returned,
+            bad_debt=loan.bad_debt,
+        )
+
+    def lend_quota(self, lender_id: str, borrower_id: str, amount: int, due_at: str) -> QuotaLoan:
+        loan = self.loans.lend(lender_id, borrower_id, amount, due_at)
+        self.bus.publish(
+            "quota.lent",
+            loan_id=loan.id,
+            lender_id=loan.lender_id,
+            borrower_id=loan.borrower_id,
+            amount=loan.amount,
+            due_at=loan.due_at,
+        )
+        return loan
+
+    def repay_quota(self, loan_id: str) -> QuotaLoan:
+        loan = self.loans.repay(loan_id)
+        self.bus.publish(
+            "quota.repaid",
+            loan_id=loan.id,
+            lender_id=loan.lender_id,
+            borrower_id=loan.borrower_id,
+            amount=loan.amount,
+        )
+        return loan
 
     def enqueue_recheck(self, bag_id: str) -> Bag:
         bag = self.bag(bag_id)
@@ -259,6 +302,9 @@ class _AuditSubscriber:
         "chute.assigned": ("chute_assign", "chute"),
         "belt.switched": ("belt_switch", "belt"),
         "bag.remapped": ("remap", "checkin"),
+        "quota.lent": ("quota_lend", "audit"),
+        "quota.repaid": ("quota_repay", "audit"),
+        "quota.rolled_back": ("quota_rollback", "audit"),
     }
 
     def __init__(self, audit: AuditChain) -> None:
@@ -270,7 +316,8 @@ class _AuditSubscriber:
             raise ConflictError(f"no audit mapping for topic {event.topic!r}")
         kind, stage = mapping
         subject = str(
-            event.payload.get("bag_id")
+            event.payload.get("loan_id")
+            or event.payload.get("bag_id")
             or event.payload.get("flight_id")
             or event.payload.get("carousel")
             or ""
@@ -278,6 +325,6 @@ class _AuditSubscriber:
         detail = {
             key: value
             for key, value in event.payload.items()
-            if key not in {"bag_id", "flight_id"}
+            if key not in {"loan_id", "bag_id", "flight_id"}
         }
         self._audit.record(kind, subject, stage, detail)
